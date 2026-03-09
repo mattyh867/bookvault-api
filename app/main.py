@@ -3,7 +3,7 @@ from fastapi.openapi.utils import get_openapi
 
 from app.database import engine
 from app.models.models import Base
-from app.routers import books, genres, reviews, authors
+from app.routers import books, genres, reviews, authors, analytics
 
 Base.metadata.create_all(bind=engine)
 
@@ -30,6 +30,7 @@ app.include_router(books.router, prefix="/books", tags=["Books"])
 app.include_router(genres.router, prefix="/genres", tags=["Genres"])
 app.include_router(reviews.router, prefix="/reviews", tags=["Reviews"])
 app.include_router(authors.router, prefix="/authors", tags=["Authors"])
+app.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 
 @app.get("/", tags=["Root"])
 def root():

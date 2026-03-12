@@ -1,56 +1,78 @@
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey, Table
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 
-user_book_association = Table(
-    "user_book_association", Base.metadata,
-    Column("user_id", Integer, ForeignKey("user.id")),
-    Column("book_id", Integer, ForeignKey("book.id"))
-)
-
-book_genre = Table(
-    "book_genre", Base.metadata,
-    Column("book_id", Integer, ForeignKey("book.id"), primary_key=True),
-    Column("genre_id", Integer, ForeignKey("genre.id"), primary_key=True),
-)
-
-class Genre(Base):
-    __tablename__ = "genre"
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), unique=True, nullable=False, index=True)
-    books = relationship("Book", secondary=book_genre, back_populates="genres")
-
-class User(Base):
-    __tablename__ = "user"
-    id = Column(Integer, primary_key=True)
-    username = Column(String(100), index=True, nullable=False)
-    password = Column(String(100), nullable=False)
-    books = relationship("Book", secondary=user_book_association, back_populates="users")
-    reviews = relationship("Review", back_populates="user")
-
+# ─── Book ─────────────────────────────────────────────────────────────────────
 class Book(Base):
     __tablename__ = "book"
-    id = Column(String(20), primary_key=True)
-    bookId = Column(String(100), index=True)
-    title = Column(String(500), index=True)
-    author = Column(String(200))
-    year_of_publication = Column(String(100))
-    publisher = Column(String(100))
-    imageURL_S = Column(String(200))
-    imageURL_M = Column(String(200))
-    imageURL_L = Column(String(200))
-    users = relationship("User", secondary=user_book_association, back_populates="books")
-    reviews = relationship("Review", back_populates="book", cascade="all, delete-orphan")
-    genres = relationship("Genre", secondary=book_genre, back_populates="books")  # ADD
 
+    id = Column(Integer, primary_key=True, index=True)
+    bookID = Column(String(100), index=True)
+    title = Column(String(500), index=True, nullable=False)
+    authors = Column(String(300), index=True)
+    average_rating = Column(Float, nullable=True)
+    isbn = Column(String(20), nullable=True)
+    isbn13 = Column(String(20), nullable=True)
+    language_code = Column(String(20), nullable=True)
+    num_pages = Column(Integer, nullable=True)
+    ratings_count = Column(Integer, nullable=True)
+    text_reviews_count = Column(Integer, nullable=True)
+    publication_date = Column(String(50), nullable=True)
+    publisher = Column(String(200), nullable=True, index=True)
+
+    reviews = relationship("Review", back_populates="book", cascade="all, delete-orphan")
+    liked_by = relationship("Like", back_populates="book", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Book id={self.id} title='{self.title}'>"
+
+
+# ─── User ─────────────────────────────────────────────────────────────────────
+class User(Base):
+    __tablename__ = "user"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), index=True, nullable=False, unique=True)
+    password = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    reviews = relationship("Review", back_populates="user")
+    likes = relationship("Like", back_populates="user")
+
+    def __repr__(self):
+        return f"<User id={self.id} username='{self.username}'>"
+
+
+# ─── Review ───────────────────────────────────────────────────────────────────
 class Review(Base):
     __tablename__ = "review"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
-    book_id = Column(Integer, ForeignKey("book.id"), nullable=False)
-    rating = Column(Float, nullable=True)
-    review_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    user = relationship("User", back_populates="reviews")
+
+    id = Column(Integer, primary_key=True, index=True)
+    content = Column(Text, nullable=True)
+    rating = Column(Float, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    book_id = Column(Integer, ForeignKey("book.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+
     book = relationship("Book", back_populates="reviews")
+    user = relationship("User", back_populates="reviews")
+
+    def __repr__(self):
+        return f"<Review id={self.id} rating={self.rating} book_id={self.book_id}>"
+
+
+# ─── Like ─────────────────────────────────────────────────────────────────────
+class Like(Base):
+    __tablename__ = "like"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("book.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+
+    book = relationship("Book", back_populates="liked_by")
+    user = relationship("User", back_populates="likes")
+
+    def __repr__(self):
+        return f"<Like id={self.id} user_id={self.user_id} book_id={self.book_id}>"

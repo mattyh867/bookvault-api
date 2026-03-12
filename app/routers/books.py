@@ -4,8 +4,9 @@ from sqlalchemy import or_, func
 from typing import Optional
 
 from app.database import get_db
-from app.models.models import Book, Genre, Review
+from app.models.models import Book, Review
 from app.auth import verify_api_key
+from app.schemas import BookCreate, BookUpdate
 
 router = APIRouter()
 
@@ -15,7 +16,6 @@ router = APIRouter()
 @router.get("/")
 def get_books(
     search: Optional[str] = Query(None, description="Search by title or author"),
-    genre: Optional[str] = Query(None, description="Filter by genre name"),
     year: Optional[int] = Query(None, description="Filter by year of publication"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -27,13 +27,11 @@ def get_books(
         query = query.filter(
             or_(
                 Book.title.ilike(f"%{search}%"),
-                Book.author.ilike(f"%{search}%")
+                Book.authors.ilike(f"%{search}%")
             )
         )
-    if genre:
-        query = query.join(Book.genres).filter(Genre.name.ilike(f"%{genre}%"))
     if year:
-        query = query.filter(Book.year_of_publication == str(year))
+        query = query.filter(Book.publication_date.ilike(f"%{year}%"))
 
     total = query.count()
     books = query.offset(offset).limit(limit).all()
@@ -51,7 +49,6 @@ def get_books(
 @router.get("/top-rated")
 def top_rated_books(
     limit: int = Query(10, ge=1, le=50),
-    genre: Optional[str] = Query(None, description="Filter by genre"),
     db: Session = Depends(get_db)
 ):
     query = (
@@ -60,14 +57,12 @@ def top_rated_books(
         .group_by(Book.id)
         .order_by(func.avg(Review.rating).desc())
     )
-    if genre:
-        query = query.join(Book.genres).filter(Genre.name.ilike(f"%{genre}%"))
 
     results = query.limit(limit).all()
     return [
         {
             "title": r.Book.title,
-            "author": r.Book.author,
+            "author": r.Book.authors,
             "avg_rating": round(r.avg_rating, 2),
             "review_count": r.review_count
         }
@@ -79,7 +74,6 @@ def top_rated_books(
 # PUBLIC — no auth required
 @router.get("/recommendations")
 def get_recommendations(
-    genre: Optional[str] = Query(None, description="Filter by genre"),
     rating_min: float = Query(4.0, ge=1.0, le=10.0, description="Minimum average rating"),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db)
@@ -91,8 +85,6 @@ def get_recommendations(
         .having(func.avg(Review.rating) >= rating_min)
         .order_by(func.avg(Review.rating).desc())
     )
-    if genre:
-        query = query.join(Book.genres).filter(Genre.name.ilike(f"%{genre}%"))
 
     results = query.limit(limit).all()
 
@@ -100,10 +92,10 @@ def get_recommendations(
         raise HTTPException(status_code=404, detail="No recommendations found for the given filters")
 
     return {
-        "filters": {"genre": genre, "rating_min": rating_min},
+        "filters": {"rating_min": rating_min},
         "count": len(results),
         "recommendations": [
-            {"title": r.Book.title, "author": r.Book.author, "avg_rating": round(r.avg_rating, 2)}
+            {"title": r.Book.title, "author": r.Book.authors, "avg_rating": round(r.avg_rating, 2)}
             for r in results
         ]
     }
@@ -112,7 +104,7 @@ def get_recommendations(
 # ─── GET /books/{id} ──────────────────────────────────────────────────────────
 # PUBLIC — no auth required
 @router.get("/{book_id}")
-def get_book(book_id: int, db: Session = Depends(get_db)):
+def get_book(book_id: str, db: Session = Depends(get_db)):
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail=f"Book with id {book_id} not found")
@@ -121,16 +113,16 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
 
 # ─── POST /books ──────────────────────────────────────────────────────────────
 # PROTECTED — requires X-API-Key header
-@router.post("/", status_code=201, dependencies=[Depends(verify_api_key)])
-def create_book(payload: dict, db: Session = Depends(get_db)):
-    genre_ids = payload.pop("genre_ids", [])
-    book = Book(**payload)
-
-    if genre_ids:
-        genres = db.query(Genre).filter(Genre.id.in_(genre_ids)).all()
-        if len(genres) != len(genre_ids):
-            raise HTTPException(status_code=404, detail="One or more genre IDs not found")
-        book.genres = genres
+@router.post(
+    "/",
+    status_code=201,
+    dependencies=[Depends(verify_api_key)],
+    summary="Create a new book",
+    description="Add a new book to the database. Requires an **X-API-Key** header."
+)
+def create_book(payload: BookCreate, db: Session = Depends(get_db)):
+    data = payload.model_dump()
+    book = Book(**data)
 
     db.add(book)
     db.commit()
@@ -141,18 +133,20 @@ def create_book(payload: dict, db: Session = Depends(get_db)):
 
 # ─── PUT /books/{id} ──────────────────────────────────────────────────────────
 # PROTECTED — requires X-API-Key header
-@router.put("/{book_id}", dependencies=[Depends(verify_api_key)])
-def update_book(book_id: int, payload: dict, db: Session = Depends(get_db)):
+@router.put(
+    "/{book_id}",
+    dependencies=[Depends(verify_api_key)],
+    summary="Update a book",
+    description="Update one or more fields on an existing book. Only include the fields you want to change. Requires an **X-API-Key** header."
+)
+def update_book(book_id: str, payload: BookUpdate, db: Session = Depends(get_db)):
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail=f"Book with id {book_id} not found")
 
-    genre_ids = payload.pop("genre_ids", None)
-    if genre_ids is not None:
-        genres = db.query(Genre).filter(Genre.id.in_(genre_ids)).all()
-        book.genres = genres
+    data = payload.model_dump(exclude_unset=True)
 
-    for field, value in payload.items():
+    for field, value in data.items():
         if hasattr(book, field):
             setattr(book, field, value)
 
@@ -164,8 +158,13 @@ def update_book(book_id: int, payload: dict, db: Session = Depends(get_db)):
 
 # ─── DELETE /books/{id} ───────────────────────────────────────────────────────
 # PROTECTED — requires X-API-Key header
-@router.delete("/{book_id}", dependencies=[Depends(verify_api_key)])
-def delete_book(book_id: int, db: Session = Depends(get_db)):
+@router.delete(
+    "/{book_id}",
+    dependencies=[Depends(verify_api_key)],
+    summary="Delete a book",
+    description="Permanently delete a book by its ID. Requires an **X-API-Key** header."
+)
+def delete_book(book_id: str, db: Session = Depends(get_db)):
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail=f"Book with id {book_id} not found")
@@ -180,14 +179,15 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
 def format_book(book: Book) -> dict:
     return {
         "id": book.id,
-        "bookId": book.bookId,
+        "bookID": book.bookID,
         "title": book.title,
-        "author": book.author,
-        "year_of_publication": book.year_of_publication,
+        "authors": book.authors,
+        "average_rating": book.average_rating,
+        "isbn": book.isbn,
+        "isbn13": book.isbn13,
+        "language_code": book.language_code,
+        "num_pages": book.num_pages,
+        "publication_date": book.publication_date,
         "publisher": book.publisher,
-        "imageURL_S": book.imageURL_S,
-        "imageURL_M": book.imageURL_M,
-        "imageURL_L": book.imageURL_L,
-        "genres": [{"id": g.id, "name": g.name} for g in book.genres],
         "review_count": len(book.reviews),
     }

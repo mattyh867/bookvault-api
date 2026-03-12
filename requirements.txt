@@ -3,3 +3,5 @@ uvicorn
 sqlalchemy
 pandas
 python-dotenv
+pytest
+httpx

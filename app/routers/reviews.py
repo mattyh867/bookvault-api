@@ -5,16 +5,19 @@ from typing import Optional
 from app.database import get_db
 from app.models.models import Review, Book, User
 from app.auth import verify_api_key
+from app.schemas import ReviewCreate, ReviewUpdate
+
 
 router = APIRouter()
 
 
 # ─── GET /reviews ─────────────────────────────────────────────────────────────
+# List all reviews, optionally filtered by book or user
 @router.get("/")
 def get_reviews(
-    book_id: Optional[int] = Query(None, description="Filter by book ID"),
+    book_id: Optional[str] = Query(None, description="Filter by book ID"),
     user_id: Optional[int] = Query(None, description="Filter by user ID"),
-    min_rating: Optional[float] = Query(None, ge=1, le=5),
+    min_rating: Optional[float] = Query(None, ge=1.0, le=10.0, description="Minimum rating (1.0–10.0)"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
@@ -40,57 +43,88 @@ def get_reviews(
 
 
 # ─── GET /reviews/{id} ────────────────────────────────────────────────────────
+# Get a single review by ID
 @router.get("/{review_id}")
 def get_review(review_id: int, db: Session = Depends(get_db)):
     review = db.query(Review).filter(Review.id == review_id).first()
+
     if not review:
         raise HTTPException(status_code=404, detail=f"Review with id {review_id} not found")
+
     return format_review(review)
 
 
 # ─── POST /reviews ────────────────────────────────────────────────────────────
-@router.post("/", status_code=201, dependencies=[Depends(verify_api_key)])
-def create_review(payload: dict, db: Session = Depends(get_db)):
-    book = db.query(Book).filter(Book.id == payload.get("book_id")).first()
+@router.post(
+    "/",
+    status_code=201,
+    dependencies=[Depends(verify_api_key)],
+    summary="Create a new review",
+    description=(
+        "Submit a review for a book. Both `book_id` and `user_id` must already exist in the database. "
+        "Each user can only submit one review per book. Requires an **X-API-Key** header."
+    )
+)
+def create_review(payload: ReviewCreate, db: Session = Depends(get_db)):
+    # Validate book exists
+    book = db.query(Book).filter(Book.id == payload.book_id).first()
     if not book:
-        raise HTTPException(status_code=404, detail=f"Book with id {payload.get('book_id')} not found")
+        raise HTTPException(status_code=404, detail=f"Book with id '{payload.book_id}' not found")
 
-    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    # Validate user exists
+    user = db.query(User).filter(User.id == payload.user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail=f"User with id {payload.get('user_id')} not found")
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
 
+    # Prevent duplicate review from same user on same book
     existing = db.query(Review).filter(
-        Review.book_id == payload.get("book_id"),
-        Review.user_id == payload.get("user_id")
+        Review.book_id == payload.book_id,
+        Review.user_id == payload.user_id
     ).first()
     if existing:
         raise HTTPException(status_code=409, detail="User has already reviewed this book")
 
-    review = Review(**payload)
+    data = payload.model_dump()
+    data["content"] = data.pop("review_text")
+    review = Review(**data)
     db.add(review)
     db.commit()
     db.refresh(review)
+
     return {"message": "Review created successfully", "review": format_review(review)}
 
 
 # ─── PUT /reviews/{id} ────────────────────────────────────────────────────────
-@router.put("/{review_id}", dependencies=[Depends(verify_api_key)])
-def update_review(review_id: int, payload: dict, db: Session = Depends(get_db)):
+@router.put(
+    "/{review_id}",
+    dependencies=[Depends(verify_api_key)],
+    summary="Update a review",
+    description="Update the rating and/or text of an existing review. Only include the fields you want to change. Requires an **X-API-Key** header."
+)
+def update_review(review_id: int, payload: ReviewUpdate, db: Session = Depends(get_db)):
     review = db.query(Review).filter(Review.id == review_id).first()
     if not review:
         raise HTTPException(status_code=404, detail=f"Review with id {review_id} not found")
 
-    for field, value in payload.items():
-        if hasattr(review, field):
-            setattr(review, field, value)
+    data = payload.model_dump(exclude_unset=True)
+    if "review_text" in data:
+        data["content"] = data.pop("review_text")
+    for field, value in data.items():
+        setattr(review, field, value)
 
     db.commit()
     db.refresh(review)
+
     return {"message": "Review updated successfully", "review": format_review(review)}
 
 
 # ─── DELETE /reviews/{id} ─────────────────────────────────────────────────────
-@router.delete("/{review_id}", dependencies=[Depends(verify_api_key)])
+@router.delete(
+    "/{review_id}",
+    dependencies=[Depends(verify_api_key)],
+    summary="Delete a review",
+    description="Permanently delete a review by its ID. Requires an **X-API-Key** header."
+)
 def delete_review(review_id: int, db: Session = Depends(get_db)):
     review = db.query(Review).filter(Review.id == review_id).first()
     if not review:
@@ -98,6 +132,7 @@ def delete_review(review_id: int, db: Session = Depends(get_db)):
 
     db.delete(review)
     db.commit()
+
     return {"message": f"Review {review_id} deleted successfully"}
 
 
@@ -107,9 +142,8 @@ def format_review(review: Review) -> dict:
         "id": review.id,
         "book_id": review.book_id,
         "user_id": review.user_id,
-        "content": review.content,
+        "review_text": review.content,
         "rating": review.rating,
-        "created_at": str(review.created_at),
         "book_title": review.book.title if review.book else None,
         "reviewer": review.user.username if review.user else None,
     }

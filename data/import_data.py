@@ -57,7 +57,7 @@ def run_import(csv_path: str = "data/booksnew.csv", limit: int = None):
             isbn=str(row.get("isbn", "")).strip(),
             isbn13=str(row.get("isbn13", "")).strip(),
             language_code=str(row.get("language_code", "")).strip(),
-            num_pages=clean_int(row.get("  num_pages")),  # note: dataset has leading spaces
+            num_pages=clean_int(row.get("num_pages")),
             ratings_count=clean_int(row.get("ratings_count")),
             text_reviews_count=clean_int(row.get("text_reviews_count")),
             publication_date=str(row.get("publication_date", "")).strip(),

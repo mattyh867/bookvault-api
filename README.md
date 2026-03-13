@@ -172,3 +172,8 @@ The test suite uses pytest with FastAPI's TestClient and a separate SQLite test 
 ```bash
 pytest tests/test_api.py -v
 ```
+
+## API Documentation
+
+Full API documentation is available in [docs/api_documentation.pdf](docs/api_documentation.pdf).
+

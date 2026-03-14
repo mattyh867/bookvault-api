@@ -3,28 +3,26 @@ from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 
 from app.database import engine, SessionLocal
-from app.models.models import Base
+from app.models.models import Base, Book
 from app.routers import books, reviews, authors, users, analytics
 from data.import_data import run_import
 
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        if db.query(Book).count() == 0:
+            print("Database empty — seeding...")
+            run_import("data/booksnew.csv")
+    finally:
+        db.close()
+    yield
 
 app = FastAPI(
     title="BookVault API",
-    description="""
-A RESTful API for book discovery, reviews, and analytics.
-
-## Authentication
-Write endpoints (POST, PUT, DELETE) require an **X-API-Key** header.  
-Read endpoints (GET) are publicly accessible.
-
-## Endpoints
-- **Books** — full CRUD + recommendations + top-rated
-- **Authors** — browse authors and view stats
-- **Reviews** — create and manage book reviews
-- **Users** — register and manage user accounts
-- **Analytics** — rating distribution, top publishers, publication trends
-    """,
+    lifespan=lifespan,
+    description="""...""",
     version="1.0.0",
 )
 
@@ -45,15 +43,12 @@ def root():
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-
     schema = get_openapi(
         title=app.title,
         version=app.version,
         description=app.description,
         routes=app.routes,
     )
-
-    # Register the API key security scheme
     schema.setdefault("components", {})
     schema["components"]["securitySchemes"] = {
         "ApiKeyAuth": {
@@ -62,33 +57,14 @@ def custom_openapi():
             "name": "X-API-Key"
         }
     }
-
-    # GET endpoints that require auth
     protected_gets = ["/users/"]
-
-    # Apply security to all write operations + specific protected GETs
     for path, methods in schema.get("paths", {}).items():
         for method, operation in methods.items():
             if method in ("post", "put", "delete", "patch"):
                 operation["security"] = [{"ApiKeyAuth": []}]
             elif method == "get" and path in protected_gets:
                 operation["security"] = [{"ApiKeyAuth": []}]
-
     app.openapi_schema = schema
     return app.openapi_schema
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Create tables
-    Base.metadata.create_all(bind=engine)
-    # Seed if empty
-    db = SessionLocal()
-    try:
-        if db.query(Book).count() == 0:
-            run_import(db)
-    finally:
-        db.close()
-    yield
-
 
 app.openapi = custom_openapi
